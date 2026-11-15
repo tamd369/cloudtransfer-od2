@@ -56,7 +56,7 @@ WATCH = [
     ("tamd369/cloudtransfer-od2", "ty-transfer-od2.yml", "ty-transfer-od2", 12, "A"),
     ("tamd369/cloudtransfer-od2", "ydy2-transfer-od2.yml", "ydy2-transfer-od2", 12, "A"),
     ("tamd369/cloudtransfer-od2", "ydout-in3-od2.yml", "ydout-in3-od2", 0, "A"),
-    ("tamd369/cloudtransfer-od2", "out-sync-od2.yml", "out-sync-od2", 12, "A"),
+    ("tamd258/cloudtransfer-speedtest", "out-sync.yml", "out-sync", 12, "B"),
     ("tamd369/cloudtransfer-od2", "gd-out2-od2.yml", "gd-out2-od2", 3, "A"),
     ("tamd369/cloudtransfer-od2", "od2-dbjm-od2.yml", "od2-dbjm-od2", 6, "A"),
     ("tamd369/cloudtransfer-od2", "out2-ty-sync-od2.yml", "out2-ty-sync-od2", 3, "A"),
