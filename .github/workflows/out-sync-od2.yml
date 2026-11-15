@@ -1,0 +1,59 @@
+name: out-sync-od2
+
+# [od2] 本文件 = 旧流程 out-sync 的 OneDrive2 版: 逻辑/程序完全一致,
+# 只把名字加了 -od2 后缀、路径真值改用本仓库自己的 PATHS_JSON(指向 OneDrive2)。
+
+# Out 同步清理 (云端版)
+#   对比 OneDrive2 与 天翼个人: 把"天翼已有 + 同名同大小"的 OneDrive 侧文件删掉
+#   (删除进 OneDrive 回收站, 可捞)
+# 天翼侧清单由本机 worker/导出比对清单.bat 生成, 放在 onedrive2:dbqd/ty_out.tsv
+#   与 ty_tg.tsv; 云端读清单 + 实时列 OneDrive 侧做比对。
+# 安全阀: 清单为空则不删; 单组可删 > 500 个拒绝执行; 报告写 dbqd/out_sync_report.txt
+
+on:
+  # 每 12 小时一次 (UTC 0/12 = 北京 8:00 / 20:00)
+  schedule:
+    - cron: "0 */12 * * *"
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "true=真删, false=只报告(演练)"
+        required: false
+        default: "true"
+
+concurrency:
+  group: out-sync-od2
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: 取仓库
+        uses: actions/checkout@v4
+
+      - name: 装 rclone
+        run: |
+          curl -s https://downloads.rclone.org/rclone-current-linux-amd64.zip -o /tmp/r.zip
+          unzip -q -o /tmp/r.zip -d /tmp
+          cp /tmp/rclone-*/rclone /usr/local/bin/
+          rclone version | head -1
+
+      - name: 写 rclone 配置
+        env:
+          RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
+        run: |
+          mkdir -p ~/.config/rclone
+          printf '%s\n' "$RCLONE_CONF" > ~/.config/rclone/rclone.conf
+
+      - name: 跑同步清理
+        env:
+          APPLY: ${{ inputs.apply || 'true' }}
+          MAX_OPS: "200"
+        run: |
+          if [ "$APPLY" = "true" ]; then
+            python3 tools/out_sync.py --apply --max-ops "$MAX_OPS"
+          else
+            python3 tools/out_sync.py
+          fi
