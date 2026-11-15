@@ -1,0 +1,163 @@
+name: out2-ty-sync-od2
+
+# [od2] 本文件 = 旧流程 out2-ty-sync 的 OneDrive2 版: 逻辑/程序完全一致,
+# 只把名字加了 -od2 后缀、路径真值改用本仓库自己的 PATHS_JSON(指向 OneDrive2)。
+
+# 源远端:out2 -> 目标网盘/out2 单向同步 + 两处齐全后归档到 源远端:out3
+#   1) 把 源远端:out2 的文件传到 目标网盘/out2 (同名同大小跳过, 源文件不动)
+#   2) 当同一个文件在 目标网盘/out2 与 /归档挂载 都有了, 把 源远端:out2 里的它移进 源远端:out3
+#      (dbjm 里是 gd-out2 切过的分片: <=300MB 看同名, >300MB 看 .part001/.part002 两片)
+#   跑法: runner 上现装 OpenList, 注入「目标网盘」+「上游网盘/Crypt(/归档挂载)」两个挂载,
+#         源远端 与报告走 rclone。
+#   ⚠️ 上传卡死的真因(2026-09-27 读 OpenList 源码 + alist 日志后更正):
+#       * `upload_thread` 在该驱动里**只被解析、从未被使用**(死配置) -> 调它没有任何作用。
+#       * 该驱动的上传 = createUploadFile -> 单流 PUT(带 ResumePolicy:1 续传) -> getUploadFileStatus 循环 -> commit,
+#         **服务端自己合成, 不需要我们拆包/合并**。
+#       * 真正的问题: 驱动那个 PUT 走 base.HttpClient **没有超时**, 189 侧一挂就是好几分钟且不报错,
+#         "续传"只在请求报错时才触发 -> 于是整轮卡死, 最后靠我们客户端的 socket 超时(360s)断开。
+#       * 缓解: 启动探针 + 连续零进展熔断 + 每文件重试(见 out2_ty_sync.py); 根治需自研带超时的 189 上传。
+#   报告: 中转远端:报告区/out2_ty_report.txt
+
+on:
+  # 每 3 小时 (UTC 0:45/3:45/.../21:45 = 北京 8:45/11:45/.../次日 5:45)
+  schedule:
+    - cron: "45 */3 * * *"
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "true=真跑(上传+归档), false=只演练"
+        required: false
+        default: "true"
+      max_ops:
+        description: "本轮最多处理几个文件"
+        required: false
+        default: "60"
+      max_total_gb:
+        description: "本轮上传总量上限(GB)"
+        required: false
+        default: "25"
+      daily_limit_gb:
+        description: "云盘当日上传总量上限(GB); 按北京自然日累计, 防超网盘日配额"
+        required: false
+        default: "180"
+      thresh_mb:
+        description: "gd-out2 的切分阈值(判定 dbjm 分片用)"
+        required: false
+        default: "300"
+      budget_min:
+        description: "本轮时间预算(分钟)"
+        required: false
+        default: "170"
+      upload_thread:
+        description: "云盘上传线程数; 该驱动里是死配置, 调了没用, 留着仅为兼容"
+        required: false
+        default: "3"
+      only:
+        description: "只处理这一个文件名(调试用)"
+        required: false
+        default: ""
+      openlist_version:
+        description: "OpenList 版本 tag"
+        required: false
+        default: "v4.2.6"
+
+concurrency:
+  group: out2-ty-sync-od2
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  # 盘名/目录名的真值走加密 Secret; 日志里只会显示 ***
+  PATHS_JSON: ${{ secrets.PATHS_JSON }}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - name: 取仓库
+        uses: actions/checkout@v4
+
+      - name: 装 rclone
+        run: |
+          curl -s https://downloads.rclone.org/rclone-current-linux-amd64.zip -o /tmp/r.zip
+          unzip -q -o /tmp/r.zip -d /tmp
+          cp /tmp/rclone-*/rclone /usr/local/bin/
+          rclone version | head -1
+
+      - name: 装 OpenList(挂目标网盘 + 上游网盘/归档挂载)
+        run: |
+          V="${{ inputs.openlist_version || 'v4.2.6' }}"
+          curl -sL "https://github.com/OpenListTeam/OpenList/releases/download/$V/openlist-linux-amd64.tar.gz" -o /tmp/ol.tar.gz
+          mkdir -p /opt/openlist && tar -xzf /tmp/ol.tar.gz -C /opt/openlist
+          chmod +x /opt/openlist/openlist
+          ls /opt/openlist | head -5
+
+      - name: 初始化并启动 OpenList
+        run: |
+          cd /opt/openlist
+          PW="$(head -c 18 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 16)"
+          echo "ALIST_PW=$PW" >> $GITHUB_ENV
+          ./openlist admin set "$PW" --data /opt/openlist/data 2>&1 | tail -3
+          nohup ./openlist server --data /opt/openlist/data > /opt/openlist/alist.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -s -m 3 http://127.0.0.1:5244/api/public/settings >/dev/null && { echo "alist 就绪"; break; }
+            sleep 2
+          done
+
+      - name: 注入存储(目标网盘 + 上游网盘 + Crypt /归档挂载)
+        env:
+          S_TY: ${{ secrets.ALIST_STORAGES_TY }}
+          S_DBJM: ${{ secrets.ALIST_STORAGES }}
+          UPLOAD_THREAD: ${{ inputs.upload_thread || '3' }}
+        run: |
+          printf '%s' "$S_TY" > /tmp/a.json
+          printf '%s' "$S_DBJM" > /tmp/b.json
+          python3 - <<'PY'
+          import io, json
+          a = json.load(io.open('/tmp/a.json', encoding='utf-8'))
+          b = json.load(io.open('/tmp/b.json', encoding='utf-8'))
+          if isinstance(a, dict): a = a.get('storages') or []
+          if isinstance(b, dict): b = b.get('storages') or []
+          seen, out = set(), []
+          for s in a + b:
+              if s['mount_path'] not in seen:
+                  seen.add(s['mount_path']); out.append(s)
+          io.open('/tmp/storages.json', 'w', encoding='utf-8').write(json.dumps(out, ensure_ascii=False))
+          print('合并后存储数:', len(out))
+          PY
+          OVER=""
+          if [ -n "$UPLOAD_THREAD" ]; then OVER="--override upload_thread=$UPLOAD_THREAD"; fi
+          python3 tools/alist_bootstrap.py --data-dir /opt/openlist/data \
+            --password "$ALIST_PW" --storages-file /tmp/storages.json --emit-env $OVER
+
+      - name: 写 rclone 配置
+        env:
+          RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
+        run: |
+          mkdir -p ~/.config/rclone
+          printf '%s\n' "$RCLONE_CONF" > ~/.config/rclone/rclone.conf
+
+      - name: 跑 out2 -> 目标网盘/out2 (+归档 out3)
+        env:
+          APPLY: ${{ inputs.apply || 'true' }}
+          MAX_OPS: ${{ inputs.max_ops || '60' }}
+          MAX_TOTAL_GB: ${{ inputs.max_total_gb || '25' }}
+          DAILY_LIMIT_GB: ${{ inputs.daily_limit_gb || '180' }}
+          THRESH_MB: ${{ inputs.thresh_mb || '300' }}
+          BUDGET_MIN: ${{ inputs.budget_min || '170' }}
+          ONLY: ${{ inputs.only || '' }}
+          ALIST_URL: "http://127.0.0.1:5244"
+          ALIST_STORAGES_TY: ${{ secrets.ALIST_STORAGES_TY }}
+        run: |
+          set -x
+          ARGS="--max-ops $MAX_OPS --max-total-gb $MAX_TOTAL_GB --daily-limit-gb $DAILY_LIMIT_GB --thresh-mb $THRESH_MB --budget-min $BUDGET_MIN"
+          if [ "$APPLY" = "true" ]; then ARGS="$ARGS --apply"; fi
+          if [ -n "$ONLY" ]; then ARGS="$ARGS --only $ONLY"; fi
+          python3 tools/out2_ty_sync.py $ARGS
+
+      - name: 出错时贴 alist 日志
+        if: failure()
+        run: tail -40 /opt/openlist/alist.log || true
