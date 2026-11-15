@@ -22,7 +22,7 @@
 | gd-backup-od2 | GoogleDrive2 三目录 → GoogleDrive6 备份 | 12h |
 | ty-transfer-od2 | 139 家庭云 `/in` 切分 → `ydout` | 12h |
 | ydy2-transfer-od2 | 139 个人云 `/in` 切分 → `ydout` | 12h |
-| out-sync-od2 | OneDrive2 成品与天翼比对（删 OneDrive 侧已有） | 12h |
+| out-sync-od2 | OneDrive2 成品与天翼比对（删 OneDrive 侧已有）—— **备用**：原 `out-sync` 的远端本来就是硬编码 `onedrive2`，没被迁移过，所以它留在原仓库继续跑，本仓库这份默认停用 | 12h |
 | flow-status-od2 | 总览卡片 → Telegram（每 6h） | 6h |
 | tg-control-od2 | Telegram 指令入口（/flow、/sub…） | 常驻 340min |
 | od2-check | 自检：rclone 远端 / PATHS_JSON 键 / OneDrive2 可达性（只打印名字与计数） | 手动 |
