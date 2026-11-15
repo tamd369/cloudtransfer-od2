@@ -1,0 +1,41 @@
+name: od2-check
+
+# 自检(只读): 确认本套件的密钥/路径真值都指对地方了。只打印名字与计数, 不打印真值。
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: od2-check
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PATHS_JSON: ${{ secrets.PATHS_JSON }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: 取仓库
+        uses: actions/checkout@v4
+
+      - name: 装 rclone
+        run: |
+          curl -s https://downloads.rclone.org/rclone-current-linux-amd64.zip -o /tmp/r.zip
+          unzip -q -o /tmp/r.zip -d /tmp
+          cp /tmp/rclone-*/rclone /usr/local/bin/
+          rclone version | head -1
+
+      - name: 写 rclone 配置
+        env:
+          RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
+        run: |
+          mkdir -p ~/.config/rclone
+          printf '%s\n' "$RCLONE_CONF" > ~/.config/rclone/rclone.conf
+          echo "远端段数: $(grep -c '^\[' ~/.config/rclone/rclone.conf)"
+
+      - name: 自检
+        run: python3 tools/od2_check.py
