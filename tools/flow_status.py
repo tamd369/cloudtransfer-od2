@@ -65,6 +65,7 @@ WATCH = [
     # gd6 -> ydy2 单向备份(2026-11-13/14 新增): 公开仓库, 每 4h
     ("tammader/cloudtransfer-gd-out-pub", "gd6-ydy2-backup.yml", "gd6-ydy2-backup", 4, "A"),
     ("tammader/cloudtransfer-gd-out-pub", "gd6-ydy2-tgvideo.yml", "gd6-ydy2-tgvideo", 4, "A"),
+    ("tammader/cloudtransfer-gd-out-pub", "gd6-ydy2-vidflat.yml", "gd6-ydy2-vidflat", 4, "A"),
     # teldrive 冷备两条(2026-10-20 纳入总览): 都跑在公开仓库, 周期 6h
     ("tammader/cloudtransfer-gd-out-pub", "yd2-teldrive.yml", "yd2-teldrive", 6, "A"),
     ("tammader/cloudtransfer-gd-out-pub", "gd2-teldrive.yml", "gd2-teldrive", 6, "A"),
