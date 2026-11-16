@@ -102,17 +102,20 @@ def alist_token():
 TOKEN = alist_token()
 
 
-def alist_post(path, payload):
+def alist_post(path, payload, timeout=180):
     req = urllib.request.Request(ALIST + path, data=json.dumps(payload).encode(),
                                  headers={"Authorization": TOKEN,
                                           "Content-Type": "application/json"})
-    d = json.loads(OP.open(req, timeout=180).read().decode("utf-8", "replace"))
+    d = json.loads(OP.open(req, timeout=timeout).read().decode("utf-8", "replace"))
     if d.get("code") != 200:
         raise RuntimeError("alist %s -> %s %s" % (path, d.get("code"), d.get("message")))
     return d.get("data")
 
 
-def alist_list(path, refresh=True, tries=3):
+LIST_TIMEOUT = 600        # 列目标目录的超时: Crypt 冷缓存要全量枚举上游, 180s 不够
+
+
+def alist_list(path, refresh=True, tries=3, timeout=LIST_TIMEOUT):
     """列目标目录(Crypt 挂载)。
     上游(豆包/飞书 children/list)响应超 30s、alist 就 500/timeout, 属链路常态,
     所以这里自己重试; 重试仍失败就抛给上层 -> 上层判"本轮跳过", 不把整轮打成 failure。"""
@@ -120,7 +123,7 @@ def alist_list(path, refresh=True, tries=3):
     for i in range(tries):
         try:
             d = alist_post("/api/fs/list", {"path": path, "page": 1, "per_page": 0,
-                                            "refresh": refresh})
+                                            "refresh": refresh}, timeout=timeout)
             out = {}
             for x in (d or {}).get("content") or []:
                 out[x["name"]] = (int(x.get("size") or 0), bool(x.get("is_dir")))
