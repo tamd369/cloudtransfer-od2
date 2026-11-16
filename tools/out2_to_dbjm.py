@@ -112,13 +112,25 @@ def alist_post(path, payload):
     return d.get("data")
 
 
-def alist_list(path, refresh=True):
-    d = alist_post("/api/fs/list", {"path": path, "page": 1, "per_page": 0,
-                                    "refresh": refresh})
-    out = {}
-    for x in (d or {}).get("content") or []:
-        out[x["name"]] = (int(x.get("size") or 0), bool(x.get("is_dir")))
-    return out
+def alist_list(path, refresh=True, tries=3):
+    """列目标目录(Crypt 挂载)。
+    上游(豆包/飞书 children/list)响应超 30s、alist 就 500/timeout, 属链路常态,
+    所以这里自己重试; 重试仍失败就抛给上层 -> 上层判"本轮跳过", 不把整轮打成 failure。"""
+    last = None
+    for i in range(tries):
+        try:
+            d = alist_post("/api/fs/list", {"path": path, "page": 1, "per_page": 0,
+                                            "refresh": refresh})
+            out = {}
+            for x in (d or {}).get("content") or []:
+                out[x["name"]] = (int(x.get("size") or 0), bool(x.get("is_dir")))
+            return out
+        except Exception as e:
+            last = e
+            log("!! 列目标失败(第 %d/%d 次): %s" % (i + 1, tries, str(e)[:160]))
+            if i + 1 < tries:
+                time.sleep(20 * (i + 1))
+    raise last
 
 
 def alist_get(path, refresh=True):
@@ -231,6 +243,31 @@ def save_json(p, obj):
         json.dump(obj, f, ensure_ascii=False, indent=1)
 
 
+READ_STREAK = os.path.join(STATE, "od2dbjm_read_streak.json")
+
+
+def lsjson_retry(remote, tries=3):
+    """列源目录: rclone 侧也会抽(网络抖动), 同样重试 3 次再交上层。"""
+    last = None
+    for i in range(tries):
+        try:
+            return lsjson(remote)
+        except Exception as e:
+            last = e
+            log("!! 列源失败(第 %d/%d 次): %s" % (i + 1, tries, str(e)[:160]))
+            if i + 1 < tries:
+                time.sleep(20 * (i + 1))
+    raise last
+
+
+def _read_streak(ok):
+    """连续读失败轮数。首轮失败=优雅跳过(不报警), 连续 >=3 轮才让整轮 failure 真报警。"""
+    d = load_json(READ_STREAK, {})
+    n = 0 if ok else int(d.get("n") or 0) + 1
+    save_json(READ_STREAK, {"n": n, "ts": time.strftime("%Y-%m-%d %H:%M:%S")})
+    return n
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true", help="真动; 不加只演练")
@@ -260,19 +297,25 @@ def main():
 
     # 1) 两边清单
     try:
-        src = lsjson(a.src)
+        src = lsjson_retry(a.src, tries=3)
     except Exception as e:
-        log("!! 读源失败: %s" % str(e)[:180])
-        lines.append("!! 读源失败: %s" % str(e)[:180])
+        n = _read_streak(False)
+        log("***跳过*** 读源失败(链路抖动?): %s | 连续 %d 轮" % (str(e)[:160], n))
+        lines.append("!! 读源失败(已重试 3 次, 本轮跳过, 不动任何文件): %s" % str(e)[:160])
+        lines.append("本轮不处理任何文件、不动任何源文件, 等下一轮自动重试。")
         finish(lines, a)
-        return 1
+        return 1 if n >= 3 else 0
     try:
-        dst = alist_list(a.dst)
+        dst = alist_list(a.dst, tries=3)
     except Exception as e:
-        log("!! 读目标失败(/归档挂载 挂载是否正常?): %s" % str(e)[:180])
-        lines.append("!! 读目标失败: %s" % str(e)[:180])
+        n = _read_streak(False)
+        log("***跳过*** 读目标失败(/归档挂载 挂载是否正常?): %s | 连续 %d 轮"
+            % (str(e)[:160], n))
+        lines.append("!! 读目标失败(已重试 3 次, 本轮跳过, 不动任何文件): %s" % str(e)[:160])
+        lines.append("本轮不处理任何文件、不动任何源文件, 等下一轮自动重试。")
         finish(lines, a)
-        return 1
+        return 1 if n >= 3 else 0
+    _read_streak(True)          # 两边都读到了 -> 连续失败计数清零
 
     todo, already, conflict, deeper = [], [], [], []
     for n, s in sorted(src.items(), key=lambda kv: kv[1]):
