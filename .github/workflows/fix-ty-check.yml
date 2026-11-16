@@ -1,0 +1,30 @@
+name: fix-ty-check
+# 临时: 在 runner 里把 PATHS_JSON 里的 天翼家庭/out2 全替换成 天翼家庭/out7 (只改该子串), 然后可选重启 out2-ty-sync-od2
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "true=真写回 Secret; false=只演练"
+        required: false
+        default: "true"
+
+permissions:
+  contents: read
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: pip pynacl
+        run: pip install --quiet pynacl
+      - name: run fix
+        env:
+          PATHS_JSON: ${{ secrets.PATHS_JSON }}
+          GH_PAT: ${{ secrets.GH_TOKEN }}
+          REPO: tamd369/cloudtransfer-od2
+        run: |
+          set -e
+          if [ "${{ inputs.apply }}" = "true" ]; then A="--apply"; else A=""; fi
+          python3 fix_ty_check.py $A
