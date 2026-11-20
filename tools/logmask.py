@@ -44,7 +44,7 @@ def _words():
 
 _ON = os.environ.get("LOG_MASK", "1").strip().lower() not in ("0", "false", "no", "off")
 
-_MEDIA_EXT = r"(?:mp4|mkv|avi|wmv|mov|flv|m4v|rmvb|ts|mpg|mpeg|webm|3gp|part\d*)"
+_MEDIA_EXT = r"(?:mp4|mkv|avi|wmv|mov|flv|m4v|rmvb|ts|mpg|mpeg|webm|3gp|srt|part\d*)"
 
 # 1) 媒体文件名(含中文/全角括号/空格/编号) —— 最需要保护的目标
 _RE_MEDIA = re.compile(
@@ -54,7 +54,8 @@ _RE_MEDIA = re.compile(
 _RE_BRACKET = re.compile(r"【[^】\n]{0,60}】")
 
 # 2) rclone 远端:  name:path   例 remote1:out2 / remote2:dir/x.txt
-_RE_REMOTE = re.compile(r"(?<!<)\b[A-Za-z0-9_\-]{2,}:[\w\u4e00-\u9fff][\w\u4e00-\u9fff/.\-]*")
+#    要求 token 里至少含一个字母或下划线 —— 否则纯数字冒号串(时间戳 08:28:59)会被误判为远端
+_RE_REMOTE = re.compile(r"(?<!<)\b[A-Za-z0-9_\-]*[A-Za-z_\-][A-Za-z0-9_\-]*:[\w\u4e00-\u9fff][\w\u4e00-\u9fff/.\-]*")
 
 # 2.5) OAuth 令牌形态(兜底): Google ya29./1///GOCSPX-, 微软 Ew.A/M.C
 _RE_TOKEN = re.compile(r"\b(?:ya29\.[\w\-]{8,}|1//[\w\-]{10,}"
@@ -159,3 +160,4 @@ if __name__ == "__main__":
     print("  源 remote-a:out: 42 个文件 | 目标 remote-b:out2: 33 个")
     print("  [验证] /some/dir -> 5 个条目: ['some_X.mp4', 'a.wmv']")
     print("  工作区 /tmp/gdout2 | rclone.conf 不变 | ALIST_URL http://127.0.0.1:5244")
+
